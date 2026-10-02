@@ -133,6 +133,37 @@ IrodoriTextBlockWeights load_text_block(core::BackendWeightStore &store,
   return weights;
 }
 
+modules::T5GemmaEncoderLayerWeights load_t5gemma2_layer(
+    core::BackendWeightStore & store,
+    const assets::TensorSource & source,
+    const IrodoriModelConfig & config,
+    assets::TensorStorageType storage_type,
+    int64_t layer) {
+    const std::string prefix = "pretrained_text_backbone.backbone.layers." + std::to_string(layer);
+    modules::T5GemmaEncoderLayerWeights out;
+    out.pre_self_attn_norm = store.load_f32_tensor(source, prefix + ".pre_self_attn_layernorm.weight", {config.t5gemma2.hidden_size});
+    out.post_self_attn_norm = store.load_f32_tensor(source, prefix + ".post_self_attn_layernorm.weight", {config.t5gemma2.hidden_size});
+    out.pre_ff_norm = store.load_f32_tensor(source, prefix + ".pre_feedforward_layernorm.weight", {config.t5gemma2.hidden_size});
+    out.post_ff_norm = store.load_f32_tensor(source, prefix + ".post_feedforward_layernorm.weight", {config.t5gemma2.hidden_size});
+    out.q_proj = binding::linear_from_source(
+        store, source, prefix + ".self_attn.q_proj", storage_type, config.t5gemma2.attention_heads * config.t5gemma2.head_dim, config.t5gemma2.hidden_size, false);
+    out.k_proj = binding::linear_from_source(
+        store, source, prefix + ".self_attn.k_proj", storage_type, config.t5gemma2.kv_heads * config.t5gemma2.head_dim, config.t5gemma2.hidden_size, false);
+    out.v_proj = binding::linear_from_source(
+        store, source, prefix + ".self_attn.v_proj", storage_type, config.t5gemma2.kv_heads * config.t5gemma2.head_dim, config.t5gemma2.hidden_size, false);
+    out.o_proj = binding::linear_from_source(
+        store, source, prefix + ".self_attn.o_proj", storage_type, config.t5gemma2.hidden_size, config.t5gemma2.attention_heads * config.t5gemma2.head_dim, false);
+    out.q_norm = binding::norm_weight_from_source(store, source, prefix + ".self_attn.q_norm", config.t5gemma2.head_dim);
+    out.k_norm = binding::norm_weight_from_source(store, source, prefix + ".self_attn.k_norm", config.t5gemma2.head_dim);
+    out.gate_proj = binding::linear_from_source(
+        store, source, prefix + ".mlp.gate_proj", storage_type, config.t5gemma2.intermediate_size, config.t5gemma2.hidden_size, false);
+    out.up_proj = binding::linear_from_source(
+        store, source, prefix + ".mlp.up_proj", storage_type, config.t5gemma2.intermediate_size, config.t5gemma2.hidden_size, false);
+    out.down_proj = binding::linear_from_source(
+        store, source, prefix + ".mlp.down_proj", storage_type, config.t5gemma2.hidden_size, config.t5gemma2.intermediate_size, false);
+    return out;
+}
+
 IrodoriModernBertLayerWeights load_modernbert_layer(
     core::BackendWeightStore &store, const assets::TensorSource &source,
     const std::string &prefix, assets::TensorStorageType storage_type,
@@ -498,22 +529,36 @@ IrodoriConditionEncoderWeights load_irodori_condition_encoder_weights(
       weight_context_bytes == 0 ? kConditionEncoderWeightContextBytes
                                 : weight_context_bytes);
   if (config.use_pretrained_text_encoder()) {
-    weights.pretrained_text.embedding = weights.store->load_tensor(
-        source, "pretrained_text_backbone.backbone.embeddings.tok_embeddings.weight",
-        weight_storage_type, {config.text_vocab_size, config.pretrained_text_dim});
-    weights.pretrained_text.embedding_norm = weights.store->load_f32_tensor(
-        source, "pretrained_text_backbone.backbone.embeddings.norm.weight",
-        {config.pretrained_text_dim});
-    weights.pretrained_text.final_norm = weights.store->load_f32_tensor(
-        source, "pretrained_text_backbone.backbone.final_norm.weight",
-        {config.pretrained_text_dim});
-    weights.pretrained_text.layers.reserve(
-        static_cast<size_t>(config.pretrained_text_layers));
-    for (int64_t layer = 0; layer < config.pretrained_text_layers; ++layer) {
-      weights.pretrained_text.layers.push_back(load_modernbert_layer(
-          *weights.store, source,
-          "pretrained_text_backbone.backbone.layers." + std::to_string(layer),
-          weight_storage_type, config, layer));
+    if (config.use_t5gemma2) {
+      weights.t5gemma2.embed_tokens = weights.store->load_tensor(
+          source, "pretrained_text_backbone.backbone.embed_tokens.weight", weight_storage_type,
+          {config.text_vocab_size, config.pretrained_text_dim});
+      weights.t5gemma2_eoi_embedding = weights.store->load_f32_tensor(
+          source, "pretrained_text_backbone.backbone.embed_tokens.eoi_embedding", {config.pretrained_text_dim});
+      weights.t5gemma2.norm = weights.store->load_f32_tensor(
+          source, "pretrained_text_backbone.backbone.norm.weight", {config.pretrained_text_dim});
+      for (int64_t layer = 0; layer < config.pretrained_text_layers; ++layer) {
+        weights.t5gemma2.layers.push_back(load_t5gemma2_layer(
+            *weights.store, source, config, weight_storage_type, layer));
+      }
+    } else {
+      weights.pretrained_text.embedding = weights.store->load_tensor(
+          source, "pretrained_text_backbone.backbone.embeddings.tok_embeddings.weight",
+          weight_storage_type, {config.text_vocab_size, config.pretrained_text_dim});
+      weights.pretrained_text.embedding_norm = weights.store->load_f32_tensor(
+          source, "pretrained_text_backbone.backbone.embeddings.norm.weight",
+          {config.pretrained_text_dim});
+      weights.pretrained_text.final_norm = weights.store->load_f32_tensor(
+          source, "pretrained_text_backbone.backbone.final_norm.weight",
+          {config.pretrained_text_dim});
+      weights.pretrained_text.layers.reserve(
+          static_cast<size_t>(config.pretrained_text_layers));
+      for (int64_t layer = 0; layer < config.pretrained_text_layers; ++layer) {
+        weights.pretrained_text.layers.push_back(load_modernbert_layer(
+            *weights.store, source,
+            "pretrained_text_backbone.backbone.layers." + std::to_string(layer),
+            weight_storage_type, config, layer));
+      }
     }
     weights.text_projector = load_pretrained_projector(
         *weights.store, source, "text_encoder", weight_storage_type, config,
@@ -673,13 +718,24 @@ core::TensorValue build_modernbert_mlp(
       .build(ctx, hidden, weights.mlp_out);
 }
 
-core::TensorValue build_modernbert_backbone(
+core::TensorValue build_pretrained_backbone(
     core::ModuleBuildContext &ctx, const core::TensorValue &input_ids,
     const core::TensorValue &mask, const core::TensorValue &full_attention_mask,
     const core::TensorValue &sliding_attention_mask,
     const core::TensorValue &positions,
     const IrodoriConditionEncoderWeights &weights,
     const IrodoriModelConfig &config) {
+  if (config.use_t5gemma2) {
+    std::vector<bool> sliding;
+    for (const auto & type : config.pretrained_text_layer_types) {
+      sliding.push_back(type == "sliding_attention");
+    }
+    auto hidden = modules::T5Gemma2EncoderModuleExp(
+        config.t5gemma2, sliding, config.t5gemma2_eoi_token_index).build(
+        ctx, input_ids, positions, full_attention_mask, sliding_attention_mask,
+        weights.t5gemma2, weights.t5gemma2_eoi_embedding);
+    return modules::MaskingModule{}.build(ctx, hidden, mask);
+  }
   auto hidden =
       modules::EmbeddingModule({config.text_vocab_size, config.pretrained_text_dim})
           .build(ctx, input_ids, weights.pretrained_text.embedding);
@@ -758,7 +814,7 @@ core::TensorValue build_irodori_text_encoder(
     const IrodoriConditionEncoderWeights &weights,
     const IrodoriModelConfig &config) {
   if (config.use_pretrained_text_encoder()) {
-    auto backbone = build_modernbert_backbone(
+    auto backbone = build_pretrained_backbone(
         ctx, input_ids, text_mask, attention_mask, sliding_attention_mask,
         positions, weights, config);
     auto projected = build_pretrained_projector(
@@ -817,7 +873,7 @@ core::TensorValue build_irodori_caption_encoder(
     const IrodoriConditionEncoderWeights &weights,
     const IrodoriModelConfig &config) {
   if (config.use_pretrained_text_encoder()) {
-    auto backbone = build_modernbert_backbone(
+    auto backbone = build_pretrained_backbone(
         ctx, input_ids, caption_mask, attention_mask, sliding_attention_mask,
         positions, weights, config);
     auto projected = build_pretrained_projector(
@@ -967,7 +1023,7 @@ struct GgmlContextDeleter {
 std::vector<float> make_text_attention_mask(const std::vector<uint8_t> &mask,
                                             int64_t batch, int64_t heads,
                                             int64_t tokens,
-                                            int64_t sliding_window = 0) {
+                                            int64_t sliding_window = 0, bool t5gemma2 = false) {
   std::vector<float> out(static_cast<size_t>(batch * heads * tokens * tokens),
                          kNegInf);
 #ifdef _OPENMP
@@ -979,8 +1035,12 @@ std::vector<float> make_text_attention_mask(const std::vector<uint8_t> &mask,
         for (int64_t k = 0; k < tokens; ++k) {
           const bool keep = mask[static_cast<size_t>(b * tokens + k)] != 0;
           const int64_t distance = q > k ? q - k : k - q;
-          const bool in_window =
-              sliding_window <= 0 || distance <= sliding_window;
+          // HF T5Gemma2 uses an asymmetric bidirectional window for even sizes.
+          const int64_t delta = q - k;
+          const bool in_window = sliding_window <= 0 || (t5gemma2
+              ? ((delta >= 0 && delta < (sliding_window + 1) / 2) ||
+                 (delta < 0 && -delta < sliding_window / 2 + 1))
+              : distance <= sliding_window);
           out[static_cast<size_t>(((b * heads + h) * tokens + q) * tokens +
                                   k)] = keep && in_window ? 0.0F : kNegInf;
         }
@@ -1409,7 +1469,7 @@ private:
               caption_sliding_attention_mask_,
               make_text_attention_mask(caption.mask, 1, caption_heads,
                                        config.max_caption_len,
-                                       config.pretrained_text_sliding_window));
+                                       config.pretrained_text_sliding_window, config.use_t5gemma2));
         }
       }
       core::write_tensor_f32(
@@ -1432,7 +1492,7 @@ private:
             text_sliding_attention_mask_,
             make_text_attention_mask(token_mask, 1, config.pretrained_text_heads,
                                      tokens_,
-                                     config.pretrained_text_sliding_window));
+                                     config.pretrained_text_sliding_window, config.use_t5gemma2));
       }
       core::write_tensor_i32(positions_, positions(tokens_));
       core::set_backend_threads(owner_->backend_, owner_->threads_);

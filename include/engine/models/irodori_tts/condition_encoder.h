@@ -106,6 +106,8 @@ struct IrodoriConditionEncoderWeights {
   std::vector<IrodoriTextBlockWeights> text_blocks;
   core::TensorValue text_norm;
   IrodoriModernBertWeights pretrained_text;
+  modules::T5GemmaEncoderWeights t5gemma2;
+  core::TensorValue t5gemma2_eoi_embedding;
   IrodoriPretrainedProjectorWeights text_projector;
   modules::LinearWeights speaker_in_proj;
   std::vector<IrodoriTextBlockWeights> speaker_blocks;

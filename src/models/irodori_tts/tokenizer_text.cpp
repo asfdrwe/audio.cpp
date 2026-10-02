@@ -1,6 +1,7 @@
 #include "engine/models/irodori_tts/tokenizer_text.h"
 
 #include "engine/framework/io/json.h"
+#include "engine/framework/tokenizers/llama_bpe.h"
 
 #include <algorithm>
 #include <cmath>
@@ -87,6 +88,30 @@ struct IrodoriTextTokenizer::Impl {
             use_v4_tokenizer ? "tokenizer_v4_json" : "tokenizer_json";
         const auto root = assets->resources.parse_json(tokenizer_id);
         const auto & model = root.require("model");
+        if (assets->config.use_t5gemma2) {
+            if (engine::io::json::require_string(model, "type") != "BPE") {
+                throw std::runtime_error("Irodori T5Gemma2 requires its bundled BPE tokenizer");
+            }
+            bpe = std::make_unique<engine::tokenizers::LlamaBpeTokenizer>(
+                engine::tokenizers::LlamaBpeTokenizerSpec{
+                    {}, {}, assets->resources.require_file("tokenizer_v4_config"),
+                    assets->resources.require_file(tokenizer_id),
+                    engine::tokenizers::LlamaBpePreTokenizer::Gemma4, {}, kSentencePieceSpace});
+            const auto bos_token = bpe->find_token_id("<bos>");
+            const auto pad_token = bpe->find_token_id("<pad>");
+            const auto unk_token = bpe->find_token_id("<unk>");
+            if (!bos_token || !pad_token || !unk_token) {
+                throw std::runtime_error("Irodori T5Gemma2 tokenizer missing BOS/PAD/UNK");
+            }
+            bos = *bos_token;
+            pad = *pad_token;
+            unk = *unk_token;
+            bpe_vocab_size = static_cast<int64_t>(model.require("vocab").as_object().size());
+            if (bpe_vocab_size != assets->config.text_vocab_size) {
+                throw std::runtime_error("Irodori T5Gemma2 tokenizer vocabulary size mismatch");
+            }
+            return;
+        }
         if (engine::io::json::require_string(model, "type") != "Unigram") {
             throw std::runtime_error("Irodori-TTS tokenizer expects HF Unigram tokenizer.json");
         }
@@ -191,6 +216,8 @@ struct IrodoriTextTokenizer::Impl {
     }
 
     std::shared_ptr<const IrodoriTTSAssets> assets;
+    std::unique_ptr<engine::tokenizers::LlamaBpeTokenizer> bpe;
+    int64_t bpe_vocab_size = 0;
     std::vector<std::string> pieces;
     std::vector<float> scores;
     std::unordered_map<std::string, int32_t> token_to_id;
@@ -205,7 +232,7 @@ IrodoriTextTokenizer::IrodoriTextTokenizer(std::shared_ptr<const IrodoriTTSAsset
     : impl_(std::make_shared<Impl>(require_assets(std::move(assets)))) {}
 
 std::vector<int32_t> IrodoriTextTokenizer::encode(const std::string & text) const {
-    auto ids = impl_->encode_piece_sequence(
+    auto ids = impl_->bpe ? impl_->bpe->encode(text, true) : impl_->encode_piece_sequence(
         impl_->uses_metaspace ? normalize_text_for_metaspace(text)
                               : normalize_text_for_llm_jp(text));
     if (impl_->assets->config.text_add_bos) {
@@ -245,7 +272,7 @@ int32_t IrodoriTextTokenizer::unk_id() const noexcept {
 }
 
 int64_t IrodoriTextTokenizer::vocab_size() const noexcept {
-    return static_cast<int64_t>(impl_->pieces.size());
+    return impl_->bpe ? impl_->bpe_vocab_size : static_cast<int64_t>(impl_->pieces.size());
 }
 
 }  // namespace engine::models::irodori_tts

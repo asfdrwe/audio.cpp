@@ -391,6 +391,7 @@
       "optional_files": {
         "tokenizer_json": "model:tokenizer.json",
         "tokenizer_v4_json": "model:tokenizer/tokenizer.json",
+        "tokenizer_v4_config": "model:tokenizer/tokenizer_config.json",
         "pretrained_text_config": "model:text_encoder_config.json"
       },
       "tensors": {
@@ -408,15 +409,16 @@
       "format": "safetensors",
       "roots": {
         "model": ".",
-        "tokenizer": "../llm-jp-3-150m",
+        "tokenizer": "..",
         "codec": "../Semantic-DACVAE-Japanese-32dim"
       },
       "files": {
         "model_config": "model:model_config.json"
       },
       "optional_files": {
-        "tokenizer_json": "tokenizer:tokenizer.json",
+        "tokenizer_json": "tokenizer:llm-jp-3-150m/tokenizer.json",
         "tokenizer_v4_json": "model:tokenizer/tokenizer.json",
+        "tokenizer_v4_config": "model:tokenizer/tokenizer_config.json",
         "pretrained_text_config": "model:text_encoder_config.json"
       },
       "tensors": {

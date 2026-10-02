@@ -8,6 +8,7 @@ The default downloadable package is the GGUF v4 Small Q8_0 checkpoint. v4 Small 
 
 | Variant | Package | Tasks | Notes |
 |---|---|---|---|
+| v4 Large (experimental local conversion) | Original `Aratako/Irodori-TTS-v4-Large` | `tts`, `clon`, `vdes` code paths | T5Gemma 2 encoder and BPE tokenizer; see validation limits below. No downloadable audio.cpp package registered. |
 | v4 Small | `Irodori-TTS-v4-Small-GGUF` | `tts`, `clon`, `vdes` | Bundles its v4 tokenizer and supports instruction/caption conditioning in the same checkpoint. |
 | 500M v3 | `Irodori-TTS-500M-v3-GGUF` | `tts`, `clon` | Uses the shared llm-jp tokenizer layout in the original safetensors package. |
 | 600M v3 VoiceDesign | `Irodori-TTS-600M-v3-VoiceDesign-GGUF` | `tts`, `clon`, `vdes` | Adds instruction/caption conditioning for voice design. |
@@ -118,3 +119,54 @@ The runtime accepts the old option names below for existing local scripts and ol
 | `max_seconds` | `max_duration_sec` |
 | `mem_saver` | `irodori_tts.mem_saver` |
 | `reference_cache_slots` | `irodori_tts.reference_cache_slots` |
+
+## v4 Large: local conversion (experimental)
+
+The Large checkpoint uses a T5Gemma 2 text/caption encoder, not the ModernBERT-ja
+encoder in Small. The loader selects it from `text_encoder_config.json`.
+The separate `T5Gemma2EncoderModuleExp` reuses the shared T5Gemma attention/MLP
+implementation and adds alternating full/sliding masks and EOI embeddings.
+The RF-DiT, speaker, duration and DACVAE code uses the checkpoint dimensions.
+Older Irodori and other T5Gemma users retain their existing execution paths.
+
+Download the converted models from [this repository](https://huggingface.co/asfdrwe/Irodori-TTS-v4-Large-audiocpp). 
+
+Or
+
+Download the **original** [Large repository](https://huggingface.co/Aratako/Irodori-TTS-v4-Large),
+including `model.safetensors`, `tokenizer/tokenizer.json`,
+`tokenizer/tokenizer_config.json`, and its licensing notices. The converter extracts
+`config_json` and `text_encoder_config_json` from the checkpoint metadata; do not
+substitute the training configuration or Small's tokenizer/configuration.
+It requires the same [Semantic-DACVAE-Japanese-32dim](https://huggingface.co/Aratako/Semantic-DACVAE-Japanese-32dim)
+codec used by Small. Convert the codec's `weights.pth` with
+`tests/irodori_tts/convert_dacvae_pth_to_safetensors.py` if needed.
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DAUDIOCPP_MODEL_SET=custom -DAUDIOCPP_MODELS=irodori_tts
+cmake --build build --target audiocpp_cli audiocpp_gguf -j 4
+
+python3 tools/community_models/irodori_tts/convert_irodori_v4_large_gguf.py \
+  --source-dir models/Irodori-TTS-v4-Large \
+  --codec models/Semantic-DACVAE-Japanese-32dim/weights.safetensors \
+  --converter build/bin/audiocpp_gguf \
+  --type f16 --output models/irodori-tts-v4-large-f16.gguf
+
+build/bin/audiocpp_cli --task tts --family irodori_tts \
+  --model models/irodori-tts-v4-large-f16.gguf --backend cpu --language ja \
+  --text "こんにちは。音声合成の動作確認です。" \
+  --request-option no_ref=true --request-option duration_sec=3 --out large.wav
+```
+
+`--type q8_0` is also accepted by the converter. A CUDA build can use
+`--backend cuda`; GPU execution and quantized Large audio quality have not been
+validated here. Large needs substantially more memory than Small. The Python
+packaging script reads only the checkpoint header; the native converter handles
+weight conversion. It rejects TorchAO packed checkpoints.
+
+For a raw safetensors directory, place the extracted `model_config.json` and
+`text_encoder_config.json` alongside `model.safetensors`, keep the bundled
+`tokenizer/` directory, and place codec `weights.safetensors` in sibling
+`Semantic-DACVAE-Japanese-32dim/`. The obsolete sibling llm-jp tokenizer is not
+needed for v4 models with a bundled tokenizer.

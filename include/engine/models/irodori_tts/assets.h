@@ -3,6 +3,8 @@
 #include "engine/framework/assets/resource_bundle.h"
 #include "engine/framework/assets/tensor_source.h"
 
+#include "engine/framework/modules/text_encoders/t5_gemma_encoder.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -17,9 +19,10 @@ struct IrodoriModelConfig {
     int64_t model_dim = 1280;
     int64_t num_layers = 12;
     int64_t num_heads = 20;
-    float mlp_ratio = 2.875F;
-    float text_mlp_ratio = 2.6F;
-    float speaker_mlp_ratio = 2.6F;
+    // Match Python/JSON double precision before truncating MLP widths.
+    double mlp_ratio = 2.875;
+    double text_mlp_ratio = 2.6;
+    double speaker_mlp_ratio = 2.6;
     float dropout = 0.0F;
     int64_t text_vocab_size = 99574;
     std::string text_encoder_type = "scratch";
@@ -27,6 +30,9 @@ struct IrodoriModelConfig {
     int64_t text_dim = 512;
     int64_t text_layers = 10;
     int64_t text_heads = 8;
+    bool use_t5gemma2 = false;
+    modules::T5GemmaEncoderConfig t5gemma2;
+    int64_t t5gemma2_eoi_token_index = 256000;
     int64_t pretrained_text_dim = 0;
     int64_t pretrained_text_layers = 0;
     int64_t pretrained_text_heads = 0;
@@ -43,7 +49,7 @@ struct IrodoriModelConfig {
     int64_t caption_dim = 0;
     int64_t caption_layers = 0;
     int64_t caption_heads = 0;
-    float caption_mlp_ratio = 0.0F;
+    double caption_mlp_ratio = 0.0;
     int64_t speaker_dim = 768;
     int64_t speaker_layers = 8;
     int64_t speaker_heads = 12;
@@ -72,7 +78,7 @@ struct IrodoriModelConfig {
     int64_t caption_dim_resolved() const noexcept;
     int64_t caption_layers_resolved() const noexcept;
     int64_t caption_heads_resolved() const noexcept;
-    float caption_mlp_ratio_resolved() const noexcept;
+    double caption_mlp_ratio_resolved() const noexcept;
 };
 
 struct IrodoriCodecConfig {

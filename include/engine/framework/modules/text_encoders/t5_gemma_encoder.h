@@ -73,4 +73,20 @@ private:
     T5GemmaEncoderConfig config_;
 };
 
+// T5Gemma 2 text-only encoder
+class T5Gemma2EncoderModuleExp {
+public:
+    T5Gemma2EncoderModuleExp(T5GemmaEncoderConfig config, std::vector<bool> sliding_layers,
+                            int64_t eoi_token_index);
+    core::TensorValue build(
+        core::ModuleBuildContext & ctx, const core::TensorValue & input_ids,
+        const core::TensorValue & positions, const core::TensorValue & full_mask,
+        const core::TensorValue & sliding_mask, const T5GemmaEncoderWeights & weights,
+        const core::TensorValue & eoi_embedding) const;
+private:
+    T5GemmaEncoderConfig config_;
+    std::vector<bool> sliding_layers_;
+    int64_t eoi_token_index_;
+};
+
 }  // namespace engine::modules

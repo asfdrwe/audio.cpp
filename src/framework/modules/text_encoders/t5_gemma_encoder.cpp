@@ -282,4 +282,52 @@ core::TensorValue T5GemmaEncoderModule::build(
     return t5_gemma_rms_norm(ctx, hidden, weights.norm, config_.rms_norm_style, config_.rms_norm_eps, config_.hidden_size);
 }
 
+T5Gemma2EncoderModuleExp::T5Gemma2EncoderModuleExp(
+    T5GemmaEncoderConfig config, std::vector<bool> sliding_layers, int64_t eoi_token_index)
+    : config_(std::move(config)), sliding_layers_(std::move(sliding_layers)),
+      eoi_token_index_(eoi_token_index) {
+    validate_config(config_);
+    if (static_cast<int64_t>(sliding_layers_.size()) != config_.layers ||
+        eoi_token_index_ < 0 || eoi_token_index_ >= config_.vocab_size) {
+        throw std::runtime_error("Invalid T5Gemma2 layer types or EOI token index");
+    }
+}
+
+core::TensorValue T5Gemma2EncoderModuleExp::build(
+    core::ModuleBuildContext & ctx, const core::TensorValue & input_ids,
+    const core::TensorValue & positions, const core::TensorValue & full_mask,
+    const core::TensorValue & sliding_mask, const T5GemmaEncoderWeights & weights,
+    const core::TensorValue & eoi_embedding) const {
+    core::validate_rank_between(input_ids, 2, 2, "T5Gemma2 input_ids");
+    const auto mask_shape = core::TensorShape::from_dims(
+        {input_ids.shape.dims[0], config_.attention_heads, input_ids.shape.dims[1], input_ids.shape.dims[1]});
+    core::validate_shape(full_mask, mask_shape, "T5Gemma2 full mask");
+    core::validate_shape(sliding_mask, mask_shape, "T5Gemma2 sliding mask");
+    core::validate_shape(positions, core::TensorShape::from_dims({input_ids.shape.dims[1]}), "T5Gemma2 positions");
+    core::validate_shape(eoi_embedding, core::TensorShape::from_dims({config_.hidden_size}), "T5Gemma2 EOI embedding");
+    if (static_cast<int64_t>(weights.layers.size()) != config_.layers) {
+        throw std::runtime_error("T5Gemma2 layer count mismatch");
+    }
+    auto hidden = EmbeddingModule({config_.vocab_size, config_.hidden_size}).build(ctx, input_ids, weights.embed_tokens);
+    hidden = core::wrap_tensor(ggml_scale(ctx.ggml, hidden.tensor,
+        std::sqrt(static_cast<float>(config_.hidden_size))), hidden.shape, GGML_TYPE_F32);
+    // HF replaces the EOI embedding *after* scaling the ordinary embeddings.
+    auto * diff = ggml_scale_bias(ctx.ggml, ggml_cast(ctx.ggml, input_ids.tensor, GGML_TYPE_F32),
+                                 1.0F, -static_cast<float>(eoi_token_index_));
+    auto * is_eoi = ggml_scale_bias(ctx.ggml, ggml_sgn(ctx.ggml, ggml_abs(ctx.ggml, diff)), -1.0F, 1.0F);
+    auto selector = core::wrap_tensor(is_eoi, input_ids.shape, GGML_TYPE_F32);
+    selector = core::reshape_tensor(ctx, selector, core::TensorShape::from_dims(
+        {input_ids.shape.dims[0], input_ids.shape.dims[1], 1}));
+    auto * ordinary = ggml_scale_bias(ctx.ggml, selector.tensor, -1.0F, 1.0F);
+    hidden = core::wrap_tensor(ggml_add(ctx.ggml, ggml_mul(ctx.ggml, hidden.tensor, ordinary),
+        ggml_mul(ctx.ggml, ggml_repeat(ctx.ggml, eoi_embedding.tensor, hidden.tensor), selector.tensor)),
+        hidden.shape, GGML_TYPE_F32);
+    for (int64_t i = 0; i < config_.layers; ++i) {
+        hidden = layer(ctx, hidden, positions, sliding_layers_[i] ? sliding_mask : full_mask,
+                       weights.layers[i], config_, i);
+    }
+    return t5_gemma_rms_norm(ctx, hidden, weights.norm, config_.rms_norm_style,
+                            config_.rms_norm_eps, config_.hidden_size);
+}
+
 }  // namespace engine::modules
